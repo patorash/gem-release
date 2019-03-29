@@ -1,0 +1,72 @@
+version: "2.1"
+description: "Release gem to RubyGems."
+
+orbs:
+  orb-tools: circleci/orb-tools@8.5.0
+
+executors:
+  ruby-latest:
+    docker:
+      - image: circleci/ruby:latest
+      resource_class: small
+
+jobs:
+  release:
+    description: Rlease gem to RubyGems
+    executor: << parameters.executor >>
+    parameters:
+      checkout:
+        default: true
+        type: boolean
+        description: |
+          Boolean for whether or not to checkout as a first step. Default is true.
+      executor:
+        default: ruby-latest
+        type: executor
+        description: |
+          Executor. Default is latest ruby docker image.
+      git_email:
+        type: String
+      git_username:
+        type: String
+    steps:
+      - when:
+          condition: << parameters.checkout >>
+          steps:
+            - checkout
+      - run:
+          name: bundle install
+          command: bundle install --jobs=4 --retry=3
+      - run:
+          name: RubyGems.org | Set credential
+          command: |
+            mkdir -p ~/.gem
+            echo ":rubygems_api_key: $RUBYGEMS_API_KEY" > ~/.gem/credentials
+            chmod 0600 ~/.gem/credentials
+      - run:
+          name: Setup git
+          command: |
+            git config user.email << parameters.git_email >>
+            git config user.name << parameters.git_username >>
+      - run:
+          name: rake release
+          command: |
+            set +e
+            filename=$(for n in *; do printf '%s\n' "$n"; done | grep gemspec)
+            gem_name=`ruby -e "require 'rubygems'; spec = Gem::Specification::load('${filename}'); puts spec.name"`
+            gem_version=`ruby -e "require 'rubygems'; spec = Gem::Specification::load('${filename}'); puts spec.version"`
+            gem list --prerelease --all --remote $gem_name \
+              | grep -E "^${gem_name}" \
+              | sed -e "s/^.*(\(.*\)).*\$/\1/" \
+              | grep -q -v $gem_version
+            result=$?
+            if [ $result = 0 ]; then
+              bundle exec rake build
+              bundle exec rake release
+            fi
+      - run:
+          name: Delete credentials
+          command: |
+            shred -u ~/.gem/credentials
+
+
